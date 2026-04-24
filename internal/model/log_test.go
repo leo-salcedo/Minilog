@@ -5,12 +5,12 @@ import "testing"
 func TestLogValidate(t *testing.T) {
 	tests := []struct {
 		name    string
-		log     *Log
+		log     *LogEvent
 		wantErr bool
 	}{
 		{
 			name: "valid log",
-			log: &Log{
+			log: &LogEvent{
 				Timestamp: "10:00",
 				Service:   "api",
 				Level:     "INFO",
@@ -22,7 +22,7 @@ func TestLogValidate(t *testing.T) {
 		},
 		{
 			name: "missing timestamp",
-			log: &Log{
+			log: &LogEvent{
 				Service: "api",
 				Level:   "info",
 				Message: "request completed",
@@ -31,7 +31,7 @@ func TestLogValidate(t *testing.T) {
 		},
 		{
 			name: "invalid timestamp format",
-			log: &Log{
+			log: &LogEvent{
 				Timestamp: "2026-04-24T10:00:00Z",
 				Service:   "api",
 				Level:     "info",
@@ -41,7 +41,7 @@ func TestLogValidate(t *testing.T) {
 		},
 		{
 			name: "invalid timestamp range",
-			log: &Log{
+			log: &LogEvent{
 				Timestamp: "24:00",
 				Service:   "api",
 				Level:     "info",
@@ -51,7 +51,7 @@ func TestLogValidate(t *testing.T) {
 		},
 		{
 			name: "missing service",
-			log: &Log{
+			log: &LogEvent{
 				Timestamp: "10:00",
 				Level:     "info",
 				Message:   "request completed",
@@ -60,7 +60,7 @@ func TestLogValidate(t *testing.T) {
 		},
 		{
 			name: "missing message",
-			log: &Log{
+			log: &LogEvent{
 				Timestamp: "10:00",
 				Service:   "api",
 				Level:     "info",
@@ -69,7 +69,7 @@ func TestLogValidate(t *testing.T) {
 		},
 		{
 			name: "missing level",
-			log: &Log{
+			log: &LogEvent{
 				Timestamp: "10:00",
 				Service:   "api",
 				Message:   "request completed",
@@ -78,7 +78,7 @@ func TestLogValidate(t *testing.T) {
 		},
 		{
 			name: "invalid level",
-			log: &Log{
+			log: &LogEvent{
 				Timestamp: "10:00",
 				Service:   "api",
 				Level:     "fatal",
@@ -88,7 +88,7 @@ func TestLogValidate(t *testing.T) {
 		},
 		{
 			name: "empty attribute key",
-			log: &Log{
+			log: &LogEvent{
 				Timestamp: "10:00",
 				Service:   "api",
 				Level:     "info",
@@ -101,7 +101,7 @@ func TestLogValidate(t *testing.T) {
 		},
 		{
 			name: "empty attribute value",
-			log: &Log{
+			log: &LogEvent{
 				Timestamp: "10:00",
 				Service:   "api",
 				Level:     "info",
@@ -114,7 +114,7 @@ func TestLogValidate(t *testing.T) {
 		},
 		{
 			name: "validation is read only",
-			log: &Log{
+			log: &LogEvent{
 				Timestamp: "10:00",
 				Service:   "api",
 				Level:     "INFO",

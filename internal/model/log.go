@@ -13,7 +13,7 @@ var validLevels = map[string]struct{}{
 	"error": {},
 }
 
-type Log struct {
+type LogEvent struct {
 	Timestamp  string            `json:"timestamp"`
 	Service    string            `json:"service"`
 	Level      string            `json:"level"`
@@ -21,7 +21,7 @@ type Log struct {
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
-func (l *Log) Validate() error {
+func (l *LogEvent) Validate() error {
 	if l == nil {
 		return fmt.Errorf("log is required")
 	}
