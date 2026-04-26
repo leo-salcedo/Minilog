@@ -74,6 +74,8 @@ Accepts either:
 - A single log event object
 - An array of log event objects
 
+#### Bash
+
 Single event example:
 
 ```bash
@@ -93,6 +95,48 @@ curl -i -X POST http://localhost:8080/logs \
   ]'
 ```
 
+#### PowerShell
+
+Single event example:
+
+```powershell
+$body = @{
+  timestamp = "10:00"
+  service = "api"
+  level = "info"
+  message = "ok"
+} | ConvertTo-Json -Compress
+
+Invoke-RestMethod -Method POST `
+  -Uri "http://localhost:8080/logs" `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+Batch example:
+
+```powershell
+$body = @(
+  @{
+    timestamp = "10:00"
+    service = "api"
+    level = "info"
+    message = "one"
+  }
+  @{
+    timestamp = "10:01"
+    service = "worker"
+    level = "warn"
+    message = "two"
+  }
+) | ConvertTo-Json -Compress
+
+Invoke-RestMethod -Method POST `
+  -Uri "http://localhost:8080/logs" `
+  -ContentType "application/json" `
+  -Body $body
+```
+
 Typical success response:
 
 ```json
@@ -108,8 +152,16 @@ Batch requests can partially succeed. In that case the response includes accepte
 
 Returns stored logs as JSON:
 
+#### Bash
+
 ```bash
 curl -i http://localhost:8080/logs
+```
+
+#### PowerShell
+
+```powershell
+Invoke-RestMethod -Method GET -Uri "http://localhost:8080/logs" | ConvertTo-Json -Depth 5
 ```
 
 Example response:
@@ -141,10 +193,16 @@ Supported query parameters:
 - `contains`
 - `limit`
 
-Example:
+#### Bash
 
 ```bash
 curl -i "http://localhost:8080/logs?level=info&service=api&contains=request&limit=10"
+```
+
+#### PowerShell
+
+```powershell
+Invoke-RestMethod -Method GET -Uri "http://localhost:8080/logs?level=info&service=api&contains=request&limit=10" | ConvertTo-Json -Depth 5
 ```
 
 Notes on filtering:
@@ -175,6 +233,21 @@ Run the test suite with:
 ```bash
 go test ./...
 ```
+
+## Shell Notes
+
+### Bash
+
+- Use the `curl` examples shown above directly
+- Line continuations use `\`
+
+### PowerShell
+
+- Prefer `Invoke-RestMethod` for API testing
+- In PowerShell, `curl` often resolves to `Invoke-WebRequest`, not the `curl` binary
+- If you do want curl, use `curl.exe`
+- Line continuations use the backtick `` ` ``, not `\`
+- If output is shortened, pipe responses to `ConvertTo-Json -Depth 5`
 
 ## Current Behavior And Limitations
 
