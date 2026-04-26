@@ -1,14 +1,11 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"sync"
 	"strings"
+	"sync"
 	"testing"
 
 	"minilog/internal/logstore"
@@ -24,8 +21,8 @@ func TestPostLogsAcceptsValidLog(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", rec.Code)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d", rec.Code)
 	}
 
 	var response struct {
@@ -54,8 +51,323 @@ func TestPostLogsAcceptsValidLogWithWhitespace(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", rec.Code)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d", rec.Code)
+	}
+}
+
+func TestPostLogsAcceptsValidBatch(t *testing.T) {
+	store := logstore.NewStore()
+	handler := NewLogsHandler(store)
+
+	req := httptest.NewRequest(http.MethodPost, "/logs", strings.NewReader(`[
+		{"timestamp":"10:00","service":"api","level":"info","message":"one"},
+		{"timestamp":"10:01","service":"worker","level":"warn","message":"two"}
+	]`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d", rec.Code)
+	}
+
+	var response struct {
+		Accepted int `json:"accepted"`
+		Rejected int `json:"rejected"`
+		Errors   []struct {
+			Index  int    `json:"index"`
+			Reason string `json:"reason"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Accepted != 2 || response.Rejected != 0 {
+		t.Fatalf("unexpected response: %+v", response)
+	}
+
+	if len(response.Errors) != 0 {
+		t.Fatalf("expected no errors, got %+v", response.Errors)
+	}
+
+	if got := len(store.All()); got != 2 {
+		t.Fatalf("expected 2 stored logs, got %d", got)
+	}
+}
+
+func TestPostLogsBatchPartialFailure(t *testing.T) {
+	store := logstore.NewStore()
+	handler := NewLogsHandler(store)
+
+	req := httptest.NewRequest(http.MethodPost, "/logs", strings.NewReader(`[
+		{"timestamp":"10:00","service":"api","level":"info","message":"one"},
+		{"timestamp":"10:01","level":"warn","message":"missing service"},
+		{"timestamp":"10:02","service":"worker","level":"error","message":"two"}
+	]`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d", rec.Code)
+	}
+
+	var response struct {
+		Accepted int `json:"accepted"`
+		Rejected int `json:"rejected"`
+		Errors   []struct {
+			Index  int    `json:"index"`
+			Reason string `json:"reason"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Accepted != 2 || response.Rejected != 1 {
+		t.Fatalf("unexpected response: %+v", response)
+	}
+
+	if len(response.Errors) != 1 {
+		t.Fatalf("expected 1 error, got %+v", response.Errors)
+	}
+
+	if response.Errors[0].Index != 1 || response.Errors[0].Reason != "service is required" {
+		t.Fatalf("unexpected error entry: %+v", response.Errors[0])
+	}
+
+	if got := len(store.All()); got != 2 {
+		t.Fatalf("expected 2 stored logs, got %d", got)
+	}
+}
+
+func TestPostLogsBatchFullyInvalid(t *testing.T) {
+	store := logstore.NewStore()
+	handler := NewLogsHandler(store)
+
+	req := httptest.NewRequest(http.MethodPost, "/logs", strings.NewReader(`[
+		{"timestamp":"24:00","service":"api","level":"info","message":"bad timestamp"},
+		{"timestamp":"10:01","service":"worker","level":"fatal","message":"bad level"}
+	]`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+
+	var response struct {
+		Accepted int `json:"accepted"`
+		Rejected int `json:"rejected"`
+		Errors   []struct {
+			Index  int    `json:"index"`
+			Reason string `json:"reason"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Accepted != 0 || response.Rejected != 2 {
+		t.Fatalf("unexpected response: %+v", response)
+	}
+
+	if len(response.Errors) != 2 {
+		t.Fatalf("expected 2 errors, got %+v", response.Errors)
+	}
+
+	if got := len(store.All()); got != 0 {
+		t.Fatalf("expected 0 stored logs, got %d", got)
+	}
+}
+
+func TestPostLogsRejectsEmptyBatch(t *testing.T) {
+	store := logstore.NewStore()
+	handler := NewLogsHandler(store)
+
+	req := httptest.NewRequest(http.MethodPost, "/logs", strings.NewReader(`[]`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+
+	var response struct {
+		Accepted int `json:"accepted"`
+		Rejected int `json:"rejected"`
+		Errors   []struct {
+			Index  int    `json:"index"`
+			Reason string `json:"reason"`
+		} `json:"errors"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Accepted != 0 || response.Rejected != 0 {
+		t.Fatalf("unexpected response: %+v", response)
+	}
+
+	if len(response.Errors) != 0 {
+		t.Fatalf("expected no errors, got %+v", response.Errors)
+	}
+
+	if response.Error != "batch must not be empty" {
+		t.Fatalf("expected empty batch error, got %+v", response)
+	}
+}
+
+func TestPostLogsBatchRejectsNullItem(t *testing.T) {
+	store := logstore.NewStore()
+	handler := NewLogsHandler(store)
+
+	req := httptest.NewRequest(http.MethodPost, "/logs", strings.NewReader(`[
+		null,
+		{"timestamp":"10:00","service":"api","level":"info","message":"ok"}
+	]`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d", rec.Code)
+	}
+
+	var response struct {
+		Accepted int `json:"accepted"`
+		Rejected int `json:"rejected"`
+		Errors   []struct {
+			Index  int    `json:"index"`
+			Reason string `json:"reason"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Accepted != 1 || response.Rejected != 1 {
+		t.Fatalf("unexpected response: %+v", response)
+	}
+
+	if len(response.Errors) != 1 || response.Errors[0].Index != 0 || response.Errors[0].Reason != "invalid JSON" {
+		t.Fatalf("unexpected errors: %+v", response.Errors)
+	}
+}
+
+func TestPostLogsBatchRejectsScalarItem(t *testing.T) {
+	store := logstore.NewStore()
+	handler := NewLogsHandler(store)
+
+	req := httptest.NewRequest(http.MethodPost, "/logs", strings.NewReader(`[
+		123,
+		{"timestamp":"10:00","service":"api","level":"info","message":"ok"}
+	]`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d", rec.Code)
+	}
+
+	var response struct {
+		Accepted int `json:"accepted"`
+		Rejected int `json:"rejected"`
+		Errors   []struct {
+			Index  int    `json:"index"`
+			Reason string `json:"reason"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Accepted != 1 || response.Rejected != 1 {
+		t.Fatalf("unexpected response: %+v", response)
+	}
+
+	if len(response.Errors) != 1 || response.Errors[0].Index != 0 || response.Errors[0].Reason != "invalid JSON" {
+		t.Fatalf("unexpected errors: %+v", response.Errors)
+	}
+}
+
+func TestPostLogsBatchRejectsNestedArrayItem(t *testing.T) {
+	store := logstore.NewStore()
+	handler := NewLogsHandler(store)
+
+	req := httptest.NewRequest(http.MethodPost, "/logs", strings.NewReader(`[
+		[{"timestamp":"10:00","service":"api","level":"info","message":"nested"}],
+		{"timestamp":"10:01","service":"api","level":"info","message":"ok"}
+	]`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d", rec.Code)
+	}
+
+	var response struct {
+		Accepted int `json:"accepted"`
+		Rejected int `json:"rejected"`
+		Errors   []struct {
+			Index  int    `json:"index"`
+			Reason string `json:"reason"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Accepted != 1 || response.Rejected != 1 {
+		t.Fatalf("unexpected response: %+v", response)
+	}
+
+	if len(response.Errors) != 1 || response.Errors[0].Index != 0 || response.Errors[0].Reason != "invalid JSON" {
+		t.Fatalf("unexpected errors: %+v", response.Errors)
+	}
+}
+
+func TestPostLogsBatchRejectsUnknownFieldItem(t *testing.T) {
+	store := logstore.NewStore()
+	handler := NewLogsHandler(store)
+
+	req := httptest.NewRequest(http.MethodPost, "/logs", strings.NewReader(`[
+		{"timestamp":"10:00","service":"api","level":"info","message":"ok","extra":"nope"},
+		{"timestamp":"10:01","service":"api","level":"info","message":"good"}
+	]`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d", rec.Code)
+	}
+
+	var response struct {
+		Accepted int `json:"accepted"`
+		Rejected int `json:"rejected"`
+		Errors   []struct {
+			Index  int    `json:"index"`
+			Reason string `json:"reason"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Accepted != 1 || response.Rejected != 1 {
+		t.Fatalf("unexpected response: %+v", response)
+	}
+
+	if len(response.Errors) != 1 || response.Errors[0].Index != 0 || response.Errors[0].Reason != "invalid JSON" {
+		t.Fatalf("unexpected errors: %+v", response.Errors)
 	}
 }
 
@@ -188,12 +500,12 @@ func TestPostLogsTimestampBoundaries(t *testing.T) {
 		{
 			name:       "lower bound valid",
 			body:       `{"timestamp":"00:00","service":"api","level":"info","message":"ok"}`,
-			wantStatus: http.StatusOK,
+			wantStatus: http.StatusCreated,
 		},
 		{
 			name:       "upper bound valid",
 			body:       `{"timestamp":"23:59","service":"api","level":"info","message":"ok"}`,
-			wantStatus: http.StatusOK,
+			wantStatus: http.StatusCreated,
 		},
 		{
 			name:       "hour out of range",
@@ -232,8 +544,8 @@ func TestPostAndGetPreserveLevelCasing(t *testing.T) {
 	postRec := httptest.NewRecorder()
 	handler.ServeHTTP(postRec, postReq)
 
-	if postRec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", postRec.Code)
+	if postRec.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d", postRec.Code)
 	}
 
 	getReq := httptest.NewRequest(http.MethodGet, "/logs", nil)
@@ -464,8 +776,8 @@ func TestConcurrentPostAndGet(t *testing.T) {
 				req := httptest.NewRequest(http.MethodPost, "/logs", strings.NewReader(`{"timestamp":"10:00","service":"api","level":"INFO","message":"ok","attributes":{"worker":"`+strings.TrimSpace(string(rune('0'+(worker%10))))+`"}}`))
 				rec := httptest.NewRecorder()
 				handler.ServeHTTP(rec, req)
-				if rec.Code != http.StatusOK {
-					t.Errorf("expected status 200, got %d", rec.Code)
+				if rec.Code != http.StatusCreated {
+					t.Errorf("expected status 201, got %d", rec.Code)
 				}
 			}
 		}(i)
@@ -505,39 +817,5 @@ func TestConcurrentPostAndGet(t *testing.T) {
 	want := writers * perWriter
 	if got := len(store.All()); got != want {
 		t.Fatalf("expected %d logs, got %d", want, got)
-	}
-}
-
-func TestStoreAppendPrintsInvalidEventError(t *testing.T) {
-	store := logstore.NewStore()
-
-	originalStdout := os.Stdout
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("failed to create pipe: %v", err)
-	}
-	os.Stdout = writer
-
-	appendErr := store.Append(model.LogEvent{
-		Timestamp: "99:99",
-		Service:   "api",
-		Level:     "info",
-		Message:   "bad",
-	})
-
-	_ = writer.Close()
-	os.Stdout = originalStdout
-
-	if appendErr == nil {
-		t.Fatal("expected append to return error")
-	}
-
-	var output bytes.Buffer
-	if _, err := io.Copy(&output, reader); err != nil {
-		t.Fatalf("failed to read captured output: %v", err)
-	}
-
-	if !strings.Contains(output.String(), "invalid log event:") {
-		t.Fatalf("expected invalid log output, got %q", output.String())
 	}
 }

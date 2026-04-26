@@ -1,11 +1,13 @@
 package logstore
 
 import (
-	"fmt"
+	"errors"
 	"sync"
 
 	"minilog/internal/model"
 )
+
+var errStoreRequired = errors.New("store is required")
 
 type Store struct {
 	mu   sync.RWMutex
@@ -20,11 +22,10 @@ func NewStore() *Store {
 
 func (s *Store) Append(log model.LogEvent) error {
 	if s == nil {
-		return fmt.Errorf("store is required")
+		return errStoreRequired
 	}
 
 	if err := log.Validate(); err != nil {
-		fmt.Printf("invalid log event: %v\n", err)
 		return err
 	}
 

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,6 +10,8 @@ import (
 	"minilog/internal/logstore"
 	"minilog/internal/model"
 )
+
+const maxLogRequestBodyBytes int64 = 1 << 20
 
 type LogsHandler struct {
 	store *logstore.Store
@@ -40,20 +43,48 @@ func (h *LogsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *LogsHandler) handlePostLogs(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxLogRequestBodyBytes)
 	defer r.Body.Close()
 
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
+	raw, err := decodeSinglePayload(r.Body)
+	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{
+				"error": "request body too large",
+			})
+			return
+		}
 
-	var log model.LogEvent
-	if err := decoder.Decode(&log); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "invalid JSON",
 		})
 		return
 	}
 
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid JSON",
+		})
+		return
+	}
+
+	switch trimmed[0] {
+	case '{':
+		h.handleSingleLogPost(w, trimmed)
+	case '[':
+		h.handleBatchLogPost(w, trimmed)
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid JSON",
+		})
+	}
+}
+
+func (h *LogsHandler) handleSingleLogPost(w http.ResponseWriter, raw []byte) {
+	log, err := decodeLogEvent(raw)
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "invalid JSON",
 		})
@@ -67,10 +98,105 @@ func (h *LogsHandler) handlePostLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]int{
+	writeJSON(w, http.StatusCreated, map[string]int{
 		"accepted": 1,
 		"rejected": 0,
 	})
+}
+
+func (h *LogsHandler) handleBatchLogPost(w http.ResponseWriter, raw []byte) {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid JSON",
+		})
+		return
+	}
+
+	type batchError struct {
+		Index  int    `json:"index"`
+		Reason string `json:"reason"`
+	}
+
+	response := struct {
+		Accepted int          `json:"accepted"`
+		Rejected int          `json:"rejected"`
+		Errors   []batchError `json:"errors"`
+		Error    string       `json:"error,omitempty"`
+	}{
+		Errors: make([]batchError, 0),
+	}
+
+	if len(items) == 0 {
+		response.Error = "batch must not be empty"
+		writeJSON(w, http.StatusBadRequest, response)
+		return
+	}
+
+	for i, item := range items {
+		log, err := decodeLogEvent(item)
+		if err != nil {
+			response.Rejected++
+			response.Errors = append(response.Errors, batchError{
+				Index:  i,
+				Reason: "invalid JSON",
+			})
+			continue
+		}
+
+		if err := h.store.Append(log); err != nil {
+			response.Rejected++
+			response.Errors = append(response.Errors, batchError{
+				Index:  i,
+				Reason: err.Error(),
+			})
+			continue
+		}
+
+		response.Accepted++
+	}
+
+	status := http.StatusBadRequest
+	if response.Accepted > 0 {
+		status = http.StatusCreated
+	}
+
+	writeJSON(w, status, response)
+}
+
+func decodeSinglePayload(body io.Reader) ([]byte, error) {
+	decoder := json.NewDecoder(body)
+	var raw json.RawMessage
+	if err := decoder.Decode(&raw); err != nil {
+		return nil, err
+	}
+
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, errors.New("extra JSON values")
+	}
+
+	return raw, nil
+}
+
+func decodeLogEvent(raw []byte) (model.LogEvent, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return model.LogEvent{}, errors.New("invalid JSON")
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+
+	var log model.LogEvent
+	if err := decoder.Decode(&log); err != nil {
+		return model.LogEvent{}, err
+	}
+
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return model.LogEvent{}, errors.New("extra JSON values")
+	}
+
+	return log, nil
 }
 
 func (h *LogsHandler) handleGetLogs(w http.ResponseWriter, r *http.Request) {
