@@ -602,6 +602,339 @@ func TestGetLogsReturnsStoredLogs(t *testing.T) {
 	}
 }
 
+func TestGetLogsQueryByLevel(t *testing.T) {
+	store := logstore.NewStore()
+	for _, log := range []model.LogEvent{
+		{Timestamp: "10:00", Service: "api", Level: "INFO", Message: "one"},
+		{Timestamp: "10:01", Service: "worker", Level: "warn", Message: "two"},
+	} {
+		if err := store.Append(log); err != nil {
+			t.Fatalf("failed to seed store: %v", err)
+		}
+	}
+
+	handler := NewLogsHandler(store)
+	req := httptest.NewRequest(http.MethodGet, "/logs?level=info", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var response struct {
+		Count int              `json:"count"`
+		Logs  []model.LogEvent `json:"logs"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Count != 1 || len(response.Logs) != 1 || response.Logs[0].Message != "one" {
+		t.Fatalf("unexpected logs response: %+v", response)
+	}
+}
+
+func TestGetLogsQueryByService(t *testing.T) {
+	store := logstore.NewStore()
+	for _, log := range []model.LogEvent{
+		{Timestamp: "10:00", Service: "api", Level: "info", Message: "one"},
+		{Timestamp: "10:01", Service: "worker", Level: "warn", Message: "two"},
+		{Timestamp: "10:02", Service: "api", Level: "error", Message: "three"},
+	} {
+		if err := store.Append(log); err != nil {
+			t.Fatalf("failed to seed store: %v", err)
+		}
+	}
+
+	handler := NewLogsHandler(store)
+	req := httptest.NewRequest(http.MethodGet, "/logs?service=%20api%20", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	var response struct {
+		Count int              `json:"count"`
+		Logs  []model.LogEvent `json:"logs"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Count != 2 || len(response.Logs) != 2 {
+		t.Fatalf("unexpected logs response: %+v", response)
+	}
+}
+
+func TestGetLogsQueryByContains(t *testing.T) {
+	store := logstore.NewStore()
+	for _, log := range []model.LogEvent{
+		{Timestamp: "10:00", Service: "api", Level: "info", Message: "request started"},
+		{Timestamp: "10:01", Service: "worker", Level: "warn", Message: "job failed"},
+		{Timestamp: "10:02", Service: "api", Level: "error", Message: "request completed"},
+	} {
+		if err := store.Append(log); err != nil {
+			t.Fatalf("failed to seed store: %v", err)
+		}
+	}
+
+	handler := NewLogsHandler(store)
+	req := httptest.NewRequest(http.MethodGet, "/logs?contains=request", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	var response struct {
+		Count int              `json:"count"`
+		Logs  []model.LogEvent `json:"logs"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Count != 2 || len(response.Logs) != 2 {
+		t.Fatalf("unexpected logs response: %+v", response)
+	}
+}
+
+func TestGetLogsQueryWithCombinedFilters(t *testing.T) {
+	store := logstore.NewStore()
+	for _, log := range []model.LogEvent{
+		{Timestamp: "10:00", Service: "api", Level: "info", Message: "request started"},
+		{Timestamp: "10:01", Service: "api", Level: "info", Message: "background task"},
+		{Timestamp: "10:02", Service: "worker", Level: "info", Message: "request started"},
+	} {
+		if err := store.Append(log); err != nil {
+			t.Fatalf("failed to seed store: %v", err)
+		}
+	}
+
+	handler := NewLogsHandler(store)
+	req := httptest.NewRequest(http.MethodGet, "/logs?level=INFO&service=api&contains=request", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	var response struct {
+		Count int              `json:"count"`
+		Logs  []model.LogEvent `json:"logs"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Count != 1 || len(response.Logs) != 1 || response.Logs[0].Message != "request started" {
+		t.Fatalf("unexpected logs response: %+v", response)
+	}
+}
+
+func TestGetLogsQueryWithLimit(t *testing.T) {
+	store := logstore.NewStore()
+	for _, log := range []model.LogEvent{
+		{Timestamp: "10:00", Service: "api", Level: "info", Message: "one"},
+		{Timestamp: "10:01", Service: "api", Level: "info", Message: "two"},
+		{Timestamp: "10:02", Service: "api", Level: "info", Message: "three"},
+	} {
+		if err := store.Append(log); err != nil {
+			t.Fatalf("failed to seed store: %v", err)
+		}
+	}
+
+	handler := NewLogsHandler(store)
+	req := httptest.NewRequest(http.MethodGet, "/logs?limit=2", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	var response struct {
+		Count int              `json:"count"`
+		Logs  []model.LogEvent `json:"logs"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Count != 2 || len(response.Logs) != 2 || response.Logs[0].Message != "one" || response.Logs[1].Message != "two" {
+		t.Fatalf("unexpected logs response: %+v", response)
+	}
+}
+
+func TestGetLogsInvalidLimitReturns400(t *testing.T) {
+	store := logstore.NewStore()
+	handler := NewLogsHandler(store)
+	req := httptest.NewRequest(http.MethodGet, "/logs?limit=abc", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+
+	var response map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response["error"] != "limit must be a positive integer" {
+		t.Fatalf("unexpected error response: %+v", response)
+	}
+}
+
+func TestGetLogsZeroLimitReturns400(t *testing.T) {
+	store := logstore.NewStore()
+	handler := NewLogsHandler(store)
+	req := httptest.NewRequest(http.MethodGet, "/logs?limit=0", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+
+	var response map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response["error"] != "limit must be a positive integer" {
+		t.Fatalf("unexpected error response: %+v", response)
+	}
+}
+
+func TestGetLogsNegativeLimitReturns400(t *testing.T) {
+	store := logstore.NewStore()
+	handler := NewLogsHandler(store)
+	req := httptest.NewRequest(http.MethodGet, "/logs?limit=-1", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+
+	var response map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response["error"] != "limit must be a positive integer" {
+		t.Fatalf("unexpected error response: %+v", response)
+	}
+}
+
+func TestGetLogsTrimmedLimitAccepted(t *testing.T) {
+	store := logstore.NewStore()
+	for _, log := range []model.LogEvent{
+		{Timestamp: "10:00", Service: "api", Level: "info", Message: "one"},
+		{Timestamp: "10:01", Service: "api", Level: "info", Message: "two"},
+		{Timestamp: "10:02", Service: "api", Level: "info", Message: "three"},
+	} {
+		if err := store.Append(log); err != nil {
+			t.Fatalf("failed to seed store: %v", err)
+		}
+	}
+
+	handler := NewLogsHandler(store)
+	req := httptest.NewRequest(http.MethodGet, "/logs?limit=%202%20", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var response struct {
+		Count int              `json:"count"`
+		Logs  []model.LogEvent `json:"logs"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Count != 2 || len(response.Logs) != 2 {
+		t.Fatalf("unexpected logs response: %+v", response)
+	}
+}
+
+func TestGetLogsBlankLevelReturns400(t *testing.T) {
+	store := logstore.NewStore()
+	handler := NewLogsHandler(store)
+	req := httptest.NewRequest(http.MethodGet, "/logs?level=%20%20", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+
+	var response map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response["error"] != "level must not be blank" {
+		t.Fatalf("unexpected error response: %+v", response)
+	}
+}
+
+func TestGetLogsBlankServiceReturns400(t *testing.T) {
+	store := logstore.NewStore()
+	handler := NewLogsHandler(store)
+	req := httptest.NewRequest(http.MethodGet, "/logs?service=%20%20", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+
+	var response map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response["error"] != "service must not be blank" {
+		t.Fatalf("unexpected error response: %+v", response)
+	}
+}
+
+func TestGetLogsNoFiltersReturnsAllLogs(t *testing.T) {
+	store := logstore.NewStore()
+	for _, log := range []model.LogEvent{
+		{Timestamp: "10:00", Service: "api", Level: "info", Message: "one"},
+		{Timestamp: "10:01", Service: "worker", Level: "warn", Message: "two"},
+	} {
+		if err := store.Append(log); err != nil {
+			t.Fatalf("failed to seed store: %v", err)
+		}
+	}
+
+	handler := NewLogsHandler(store)
+	req := httptest.NewRequest(http.MethodGet, "/logs", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	var response struct {
+		Count int              `json:"count"`
+		Logs  []model.LogEvent `json:"logs"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Count != 2 || len(response.Logs) != 2 {
+		t.Fatalf("unexpected logs response: %+v", response)
+	}
+}
+
 func TestGetLogsReturnsStoredLogsInAppendOrder(t *testing.T) {
 	store := logstore.NewStore()
 	for _, log := range []model.LogEvent{

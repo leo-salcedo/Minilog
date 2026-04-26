@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"minilog/internal/logstore"
 	"minilog/internal/model"
@@ -14,10 +16,16 @@ import (
 const maxLogRequestBodyBytes int64 = 1 << 20
 
 type LogsHandler struct {
-	store *logstore.Store
+	store logStore
 }
 
-func NewLogsHandler(store *logstore.Store) *LogsHandler {
+type logStore interface {
+	Append(model.LogEvent) error
+	All() []model.LogEvent
+	Query(logstore.QueryOptions) ([]model.LogEvent, error)
+}
+
+func NewLogsHandler(store logStore) *LogsHandler {
 	return &LogsHandler{store: store}
 }
 
@@ -200,7 +208,21 @@ func decodeLogEvent(raw []byte) (model.LogEvent, error) {
 }
 
 func (h *LogsHandler) handleGetLogs(w http.ResponseWriter, r *http.Request) {
-	logs := h.store.All()
+	opts, err := parseQueryOptions(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	logs, err := h.store.Query(opts)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
 	if logs == nil {
 		logs = []model.LogEvent{}
 	}
@@ -211,6 +233,27 @@ func (h *LogsHandler) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 		Count: len(logs),
 		Logs:  logs,
 	})
+}
+
+func parseQueryOptions(r *http.Request) (logstore.QueryOptions, error) {
+	query := r.URL.Query()
+
+	opts := logstore.QueryOptions{
+		Level:    query.Get("level"),
+		Service:  query.Get("service"),
+		Contains: query.Get("contains"),
+	}
+
+	if rawLimit := query.Get("limit"); rawLimit != "" {
+		limit, err := strconv.Atoi(strings.TrimSpace(rawLimit))
+		if err != nil {
+			return logstore.QueryOptions{}, errors.New("limit must be a positive integer")
+		}
+		opts.Limit = limit
+		opts.HasLimit = true
+	}
+
+	return opts, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

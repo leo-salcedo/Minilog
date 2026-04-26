@@ -84,6 +84,191 @@ func TestAllReturnsAllLogs(t *testing.T) {
 	}
 }
 
+func TestQueryByLevel(t *testing.T) {
+	store := NewStore()
+	for _, log := range []model.LogEvent{
+		{Timestamp: "10:00", Service: "api", Level: "INFO", Message: "one"},
+		{Timestamp: "10:01", Service: "worker", Level: "warn", Message: "two"},
+		{Timestamp: "10:02", Service: "api", Level: "error", Message: "three"},
+	} {
+		if err := store.Append(log); err != nil {
+			t.Fatalf("expected append to succeed, got error: %v", err)
+		}
+	}
+
+	got, err := store.Query(QueryOptions{Level: "info"})
+	if err != nil {
+		t.Fatalf("expected query to succeed, got error: %v", err)
+	}
+	if len(got) != 1 || got[0].Message != "one" {
+		t.Fatalf("unexpected query result: %+v", got)
+	}
+}
+
+func TestQueryByService(t *testing.T) {
+	store := NewStore()
+	for _, log := range []model.LogEvent{
+		{Timestamp: "10:00", Service: "api", Level: "info", Message: "one"},
+		{Timestamp: "10:01", Service: "worker", Level: "warn", Message: "two"},
+		{Timestamp: "10:02", Service: "api", Level: "error", Message: "three"},
+	} {
+		if err := store.Append(log); err != nil {
+			t.Fatalf("expected append to succeed, got error: %v", err)
+		}
+	}
+
+	got, err := store.Query(QueryOptions{Service: "  api  "})
+	if err != nil {
+		t.Fatalf("expected query to succeed, got error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 logs, got %+v", got)
+	}
+}
+
+func TestQueryByContains(t *testing.T) {
+	store := NewStore()
+	for _, log := range []model.LogEvent{
+		{Timestamp: "10:00", Service: "api", Level: "info", Message: "request started"},
+		{Timestamp: "10:01", Service: "worker", Level: "warn", Message: "job failed"},
+		{Timestamp: "10:02", Service: "api", Level: "error", Message: "request completed"},
+	} {
+		if err := store.Append(log); err != nil {
+			t.Fatalf("expected append to succeed, got error: %v", err)
+		}
+	}
+
+	got, err := store.Query(QueryOptions{Contains: "request"})
+	if err != nil {
+		t.Fatalf("expected query to succeed, got error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 logs, got %+v", got)
+	}
+}
+
+func TestQueryWithCombinedFilters(t *testing.T) {
+	store := NewStore()
+	for _, log := range []model.LogEvent{
+		{Timestamp: "10:00", Service: "api", Level: "info", Message: "request started"},
+		{Timestamp: "10:01", Service: "api", Level: "info", Message: "background task"},
+		{Timestamp: "10:02", Service: "worker", Level: "info", Message: "request started"},
+	} {
+		if err := store.Append(log); err != nil {
+			t.Fatalf("expected append to succeed, got error: %v", err)
+		}
+	}
+
+	got, err := store.Query(QueryOptions{
+		Level:    "INFO",
+		Service:  "api",
+		Contains: "request",
+	})
+	if err != nil {
+		t.Fatalf("expected query to succeed, got error: %v", err)
+	}
+	if len(got) != 1 || got[0].Message != "request started" {
+		t.Fatalf("unexpected query result: %+v", got)
+	}
+}
+
+func TestQueryWithLimit(t *testing.T) {
+	store := NewStore()
+	for _, log := range []model.LogEvent{
+		{Timestamp: "10:00", Service: "api", Level: "info", Message: "one"},
+		{Timestamp: "10:01", Service: "api", Level: "info", Message: "two"},
+		{Timestamp: "10:02", Service: "api", Level: "info", Message: "three"},
+	} {
+		if err := store.Append(log); err != nil {
+			t.Fatalf("expected append to succeed, got error: %v", err)
+		}
+	}
+
+	got, err := store.Query(QueryOptions{Limit: 2, HasLimit: true})
+	if err != nil {
+		t.Fatalf("expected query to succeed, got error: %v", err)
+	}
+	if len(got) != 2 || got[0].Message != "one" || got[1].Message != "two" {
+		t.Fatalf("unexpected query result: %+v", got)
+	}
+}
+
+func TestQueryRejectsBlankLevel(t *testing.T) {
+	store := NewStore()
+
+	_, err := store.Query(QueryOptions{Level: "   "})
+	if err == nil || err.Error() != "level must not be blank" {
+		t.Fatalf("expected blank level error, got %v", err)
+	}
+}
+
+func TestQueryRejectsBlankService(t *testing.T) {
+	store := NewStore()
+
+	_, err := store.Query(QueryOptions{Service: "   "})
+	if err == nil || err.Error() != "service must not be blank" {
+		t.Fatalf("expected blank service error, got %v", err)
+	}
+}
+
+func TestQueryRejectsZeroLimit(t *testing.T) {
+	store := NewStore()
+
+	_, err := store.Query(QueryOptions{Limit: 0, HasLimit: true})
+	if err == nil || err.Error() != "limit must be a positive integer" {
+		t.Fatalf("expected zero limit error, got %v", err)
+	}
+}
+
+func TestQueryRejectsNegativeLimit(t *testing.T) {
+	store := NewStore()
+
+	_, err := store.Query(QueryOptions{Limit: -1, HasLimit: true})
+	if err == nil || err.Error() != "limit must be a positive integer" {
+		t.Fatalf("expected negative limit error, got %v", err)
+	}
+}
+
+func TestQueryLevelTrimsWhitespace(t *testing.T) {
+	store := NewStore()
+	for _, log := range []model.LogEvent{
+		{Timestamp: "10:00", Service: "api", Level: "INFO", Message: "one"},
+		{Timestamp: "10:01", Service: "worker", Level: "warn", Message: "two"},
+	} {
+		if err := store.Append(log); err != nil {
+			t.Fatalf("expected append to succeed, got error: %v", err)
+		}
+	}
+
+	got, err := store.Query(QueryOptions{Level: "  info  "})
+	if err != nil {
+		t.Fatalf("expected query to succeed, got error: %v", err)
+	}
+	if len(got) != 1 || got[0].Message != "one" {
+		t.Fatalf("unexpected query result: %+v", got)
+	}
+}
+
+func TestQueryContainsIsCaseSensitive(t *testing.T) {
+	store := NewStore()
+	for _, log := range []model.LogEvent{
+		{Timestamp: "10:00", Service: "api", Level: "info", Message: "Request started"},
+		{Timestamp: "10:01", Service: "api", Level: "info", Message: "request completed"},
+	} {
+		if err := store.Append(log); err != nil {
+			t.Fatalf("expected append to succeed, got error: %v", err)
+		}
+	}
+
+	got, err := store.Query(QueryOptions{Contains: "request"})
+	if err != nil {
+		t.Fatalf("expected query to succeed, got error: %v", err)
+	}
+	if len(got) != 1 || got[0].Message != "request completed" {
+		t.Fatalf("unexpected query result: %+v", got)
+	}
+}
+
 func TestAllReturnsCopy(t *testing.T) {
 	store := NewStore()
 	if err := store.Append(model.LogEvent{
